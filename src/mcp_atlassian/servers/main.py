@@ -33,6 +33,7 @@ from mcp_atlassian.utils.oauth import (
     DC_AUTHORIZE_PATH,
     DC_TOKEN_PATH,
 )
+from mcp_atlassian.utils.scope_guard import configured_scope_filter
 from mcp_atlassian.utils.token_verifier import AtlassianOpaqueTokenVerifier
 from mcp_atlassian.utils.tools import get_enabled_tools, should_include_tool
 from mcp_atlassian.utils.toolsets import (
@@ -279,6 +280,24 @@ class AtlassianMCP(ErrorPreservingFastMCP[MainAppContext]):
         elif jira_config is not None:
             jira_is_cloud = bool(jira_config.is_cloud)
 
+        confluence_config = (
+            app_lifespan_state.full_confluence_config if app_lifespan_state else None
+        )
+        # User lookups cannot be scoped to a space/project, so the user
+        # toolsets are disabled whenever the matching allowlist is active.
+        # Without a global config (header-only mode) the env var applies.
+        blocked_toolsets: set[str] = set()
+        projects_filter = configured_scope_filter(
+            jira_config, "projects_filter", "JIRA_PROJECTS_FILTER"
+        )
+        if isinstance(projects_filter, str):
+            blocked_toolsets.add("toolset:jira_users")
+        spaces_filter = configured_scope_filter(
+            confluence_config, "spaces_filter", "CONFLUENCE_SPACES_FILTER"
+        )
+        if isinstance(spaces_filter, str):
+            blocked_toolsets.add("toolset:confluence_users")
+
         return {
             "read_only": read_only,
             "enabled_tools_filter": enabled_tools_filter,
@@ -286,13 +305,15 @@ class AtlassianMCP(ErrorPreservingFastMCP[MainAppContext]):
             "app_lifespan_state": app_lifespan_state,
             "header_based_services": header_based_services,
             "jira_is_cloud": jira_is_cloud,
+            "blocked_toolsets": blocked_toolsets,
         }
 
     def _is_tool_authorized(
         self, registered_name: str, tool_obj: FastMCPTool, ctx: dict[str, Any]
     ) -> bool:
         """Authorization boundaries enforced at BOTH listing and call time: the
-        ENABLED_TOOLS allowlist, the enabled toolsets, and read-only mode.
+        ENABLED_TOOLS allowlist, the enabled toolsets, read-only mode, and the
+        user toolsets blocked by an active space/project allowlist.
 
         These are security boundaries — a tool excluded here must not be invocable
         by name. (Service availability, below, is a listing-only UX filter: an
@@ -306,6 +327,8 @@ class AtlassianMCP(ErrorPreservingFastMCP[MainAppContext]):
         if not should_include_tool(registered_name, ctx["enabled_tools_filter"]):
             return False
         if ctx["read_only"] and "write" in tool_tags:
+            return False
+        if tool_tags & ctx.get("blocked_toolsets", set()):
             return False
         return True
 

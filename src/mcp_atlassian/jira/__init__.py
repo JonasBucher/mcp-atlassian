@@ -24,6 +24,7 @@ from .issues import IssuesMixin
 from .links import LinksMixin
 from .metrics import MetricsMixin
 from .project_analysis import ProjectAnalysisMixin
+from .project_guard import ProjectAccessDeniedError, ProjectGuardMixin
 from .projects import ProjectsMixin
 from .queues import QueuesMixin
 from .sla import SLAMixin
@@ -36,6 +37,7 @@ from .worklog import WorklogMixin
 
 
 class JiraFetcher(
+    ProjectGuardMixin,  # must stay first: wraps the methods of all mixins below
     ProjectsMixin,
     FieldsMixin,
     FieldOptionsMixin,
@@ -64,6 +66,7 @@ class JiraFetcher(
     The main Jira client class providing access to all Jira operations.
 
     This class inherits from multiple mixins that provide specific functionality:
+    - ProjectGuardMixin: Enforces JIRA_PROJECTS_FILTER on all operations
     - ProjectsMixin: Project-related operations
     - FieldsMixin: Field-related operations
     - FormattingMixin: Content formatting utilities
@@ -96,5 +99,7 @@ __all__ = [
     "JiraClient",
     "Jira",
     "MetricsMixin",
+    "ProjectAccessDeniedError",
+    "ProjectGuardMixin",
     "SLAMixin",
 ]

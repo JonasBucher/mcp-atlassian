@@ -11,6 +11,7 @@ from mcp_atlassian.exceptions import MCPAtlassianAuthenticationError
 from mcp_atlassian.jira import JiraFetcher
 from mcp_atlassian.jira.constants import DEFAULT_READ_JIRA_FIELDS
 from mcp_atlassian.jira.issues import IssuesMixin, logger
+from mcp_atlassian.jira.project_guard import ProjectAccessDeniedError
 from mcp_atlassian.models.jira import JiraIssue
 from tests.utils.mocks import setup_api3_passthrough_mocks
 
@@ -25,6 +26,11 @@ class TestIssuesMixin:
 
         # Add mock methods that would be provided by other mixins
         mixin._get_account_id = MagicMock(return_value="test-account-id")
+        # ProjectGuardMixin resolves an issue's real project before access
+        # (only consulted when config.projects_filter is set).
+        mixin.jira.issue.side_effect = lambda key, fields=None: {
+            "fields": {"project": {"key": str(key).split("-")[0]}}
+        }
         mixin.get_available_transitions = MagicMock(
             return_value=[{"id": "10", "name": "In Progress"}]
         )
@@ -2395,14 +2401,13 @@ class TestIssuesMixin:
         issues_mixin.jira.get_issue.side_effect = Exception("API error")
 
         # Call the method and verify it raises the expected exception
+        # ProjectGuardMixin denies before the upstream prefix check runs.
         with pytest.raises(
-            Exception,
-            match=(
-                "Error retrieving issue TEST-123: "
-                "Issue with project prefix 'TEST' are restricted by configuration"
-            ),
+            ProjectAccessDeniedError,
+            match="Issue 'TEST-123' is outside the projects allowed",
         ):
             issues_mixin.get_issue("TEST-123")
+        issues_mixin.jira.get_issue.assert_not_called()
 
     def test_get_issue_with_config_projects_filter_allowed(
         self, issues_mixin: IssuesMixin, make_issue_data

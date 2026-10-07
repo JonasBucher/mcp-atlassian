@@ -28,6 +28,7 @@ from mcp_atlassian.utils.env import (
 )
 from mcp_atlassian.utils.oauth import OAuthConfig
 from mcp_atlassian.utils.proxy import get_proxy_settings_from_env
+from mcp_atlassian.utils.scope_guard import configured_scope_filter
 from mcp_atlassian.utils.urls import validate_url_for_ssrf
 
 if TYPE_CHECKING:
@@ -56,7 +57,9 @@ class _ServiceSpec:
     url_header: str  # X-Atlassian-{Service}-Url
     token_header: str  # X-Atlassian-{Service}-Personal-Token
     passthrough_env_var: str  # {SERVICE}_PASSTHROUGH_HEADERS
-    filter_kwargs: dict[str, Any]  # e.g. {"projects_filter": None}
+    # config attr -> env var of the space/project allowlist, applied to
+    # header-PAT configs as well (fork: enforced in every auth mode)
+    filter_kwargs: dict[str, str]  # e.g. {"projects_filter": "JIRA_PROJECTS_FILTER"}
     get_session: Callable[[Any], Any]  # fetcher → session
     validate_fn: Callable[[Any], Any]  # fetcher → validation data
     on_validated: Callable[
@@ -323,7 +326,7 @@ def _jira_spec() -> _ServiceSpec:
         url_header="X-Atlassian-Jira-Url",
         token_header="X-Atlassian-Jira-Personal-Token",  # noqa: S106
         passthrough_env_var="JIRA_PASSTHROUGH_HEADERS",
-        filter_kwargs={"projects_filter": None},
+        filter_kwargs={"projects_filter": "JIRA_PROJECTS_FILTER"},
         get_session=lambda f: f.jira._session,
         validate_fn=lambda f: f.get_current_user_account_id(),
         on_validated=_jira_on_validated,
@@ -345,7 +348,7 @@ def _confluence_spec() -> _ServiceSpec:
         url_header="X-Atlassian-Confluence-Url",
         token_header="X-Atlassian-Confluence-Personal-Token",  # noqa: S106
         passthrough_env_var="CONFLUENCE_PASSTHROUGH_HEADERS",
-        filter_kwargs={"spaces_filter": None},
+        filter_kwargs={"spaces_filter": "CONFLUENCE_SPACES_FILTER"},
         get_session=lambda f: f.confluence._session,
         validate_fn=lambda f: f.get_current_user_info(),
         on_validated=_confluence_on_validated,
@@ -383,6 +386,20 @@ def _get_global_config(
             "available from lifespan context."
         )
     return config
+
+
+def _header_filter_kwargs(ctx: Context, spec: _ServiceSpec) -> dict[str, Any]:
+    """Space/project allowlist for a header-PAT config.
+
+    The instance URL comes from the request, but the operator's allowlist must
+    still apply; otherwise header-only deployments would be unfiltered.
+    """
+    app_ctx = _get_app_lifespan_ctx(ctx)
+    global_config = getattr(app_ctx, spec.config_attr, None) if app_ctx else None
+    return {
+        attr: configured_scope_filter(global_config, attr, env_var)
+        for attr, env_var in spec.filter_kwargs.items()
+    }
 
 
 def _get_passthrough_header_names(config: Any, spec: _ServiceSpec) -> list[str]:
@@ -871,7 +888,7 @@ async def _get_fetcher(ctx: Context, spec: _ServiceSpec) -> Any:
                 # selected per request.
                 custom_headers=None,
                 passthrough_headers=get_header_names(spec.passthrough_env_var),
-                **spec.filter_kwargs,
+                **_header_filter_kwargs(ctx, spec),
             )
             return _create_and_validate(
                 request,

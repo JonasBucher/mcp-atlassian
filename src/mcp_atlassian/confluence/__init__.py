@@ -13,12 +13,14 @@ from .pages import PagesMixin
 from .permissions import PermissionsMixin
 from .restrictions import RestrictionsMixin
 from .search import SearchMixin
+from .space_guard import SpaceAccessDeniedError, SpaceGuardMixin
 from .spaces import SpacesMixin
 from .templates import TemplatesMixin
 from .users import UsersMixin
 
 
 class ConfluenceFetcher(
+    SpaceGuardMixin,  # must stay first: wraps the methods of all mixins below
     SearchMixin,
     SpacesMixin,
     PagesMixin,
@@ -37,6 +39,7 @@ class ConfluenceFetcher(
     API as the original ConfluenceFetcher class.
 
     Available mixins:
+    - SpaceGuardMixin: Enforces CONFLUENCE_SPACES_FILTER on all operations
     - SearchMixin: CQL search operations
     - SpacesMixin: Space operations
     - PagesMixin: Page operations
@@ -60,5 +63,7 @@ __all__ = [
     "AnalyticsMixin",
     "PermissionsMixin",
     "RestrictionsMixin",
+    "SpaceAccessDeniedError",
+    "SpaceGuardMixin",
     "TemplatesMixin",
 ]
