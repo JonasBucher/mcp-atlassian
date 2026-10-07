@@ -19,13 +19,13 @@ methods added upstream cannot silently bypass the guard after a merge.
 
 from __future__ import annotations
 
-import inspect
 import logging
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from ..utils.scope_guard import install_guards, iter_values
 from .client import ConfluenceClient
 from .v2_adapter import ConfluenceV2Adapter
 
@@ -173,7 +173,8 @@ GUARD_RULES: dict[str, GuardRule] = {
 }
 
 # Public fetcher methods that deliberately stay unguarded because they do not
-# touch space-scoped content.
+# touch space-scoped content. The user-search tool is blocked at tool level
+# instead (servers/main.py), because user lookups cannot be scoped to a space.
 UNGUARDED_METHODS: frozenset[str] = frozenset(
     {
         "search_user",
@@ -309,33 +310,14 @@ class SpaceGuardMixin(ConfluenceClient):
         )
         for params, check in checks:
             for param in params:
-                for value in _values(arguments.get(param)):
+                for value in iter_values(arguments.get(param)):
                     check(value)
 
+    def _scope_guard_active(self) -> bool:
+        return self._space_allowlist is not None
 
-def _values(value: Any) -> Iterable[str]:
-    if value is None or value == "":
-        return ()
-    if isinstance(value, str | int):
-        return (str(value),)
-    return tuple(str(v) for v in value if v not in (None, ""))
-
-
-def _make_guarded(name: str, rule: GuardRule) -> Callable[..., Any]:
-    def guarded(self: SpaceGuardMixin, *args: Any, **kwargs: Any) -> Any:
-        target = getattr(super(SpaceGuardMixin, self), name)
-        if self._space_allowlist is None:
-            return target(*args, **kwargs)
-        bound = inspect.signature(target).bind_partial(*args, **kwargs)
-        self._enforce_rule(rule, bound.arguments)
-        result = target(*args, **kwargs)
+    def _guard_result(self, rule: GuardRule, result: Any) -> Any:
         return rule.result(self, result) if rule.result else result
 
-    guarded.__name__ = name
-    guarded.__qualname__ = f"SpaceGuardMixin.{name}"
-    guarded.__doc__ = f"Space-guarded wrapper around ``{name}``."
-    return guarded
 
-
-for _name, _rule in GUARD_RULES.items():
-    setattr(SpaceGuardMixin, _name, _make_guarded(_name, _rule))
+install_guards(SpaceGuardMixin, GUARD_RULES)
