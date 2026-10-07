@@ -33,6 +33,7 @@ from mcp_atlassian.utils.oauth import (
     DC_AUTHORIZE_PATH,
     DC_TOKEN_PATH,
 )
+from mcp_atlassian.utils.scope_guard import configured_scope_filter
 from mcp_atlassian.utils.token_verifier import AtlassianOpaqueTokenVerifier
 from mcp_atlassian.utils.tools import get_enabled_tools, should_include_tool
 from mcp_atlassian.utils.toolsets import (
@@ -284,12 +285,17 @@ class AtlassianMCP(ErrorPreservingFastMCP[MainAppContext]):
         )
         # User lookups cannot be scoped to a space/project, so the user
         # toolsets are disabled whenever the matching allowlist is active.
+        # Without a global config (header-only mode) the env var applies.
         blocked_toolsets: set[str] = set()
-        projects_filter = getattr(jira_config, "projects_filter", None)
-        if isinstance(projects_filter, str) and projects_filter.strip():
+        projects_filter = configured_scope_filter(
+            jira_config, "projects_filter", "JIRA_PROJECTS_FILTER"
+        )
+        if isinstance(projects_filter, str):
             blocked_toolsets.add("toolset:jira_users")
-        spaces_filter = getattr(confluence_config, "spaces_filter", None)
-        if isinstance(spaces_filter, str) and spaces_filter.strip():
+        spaces_filter = configured_scope_filter(
+            confluence_config, "spaces_filter", "CONFLUENCE_SPACES_FILTER"
+        )
+        if isinstance(spaces_filter, str):
             blocked_toolsets.add("toolset:confluence_users")
 
         return {

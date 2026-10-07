@@ -17,6 +17,7 @@ A guard mixin must implement:
 from __future__ import annotations
 
 import inspect
+import os
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
@@ -31,6 +32,27 @@ def iter_values(value: Any) -> Iterable[str]:
     if isinstance(value, str | int):
         return (str(value),)
     return tuple(str(v) for v in value if v not in (None, ""))
+
+
+def configured_scope_filter(config: Any, attr: str, env_var: str) -> Any:
+    """Return the space/project allowlist that applies to a request.
+
+    Uses the global (lifespan) config when one exists; otherwise falls back to
+    the environment variable it would have been read from, so header-only
+    deployments without a global config are filtered too.
+
+    Args:
+        config: The global JiraConfig/ConfluenceConfig, or None.
+        attr: Config attribute holding the filter (e.g. ``projects_filter``).
+        env_var: Environment variable holding the filter.
+
+    Returns:
+        The filter value, or None when no filter is configured.
+    """
+    value = getattr(config, attr, None) if config is not None else os.getenv(env_var)
+    if isinstance(value, str):
+        value = value.strip()
+    return value or None
 
 
 def install_guards(mixin: type, rules: Mapping[str, Any]) -> None:

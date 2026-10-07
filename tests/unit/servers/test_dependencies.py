@@ -646,7 +646,8 @@ class TestGetJiraFetcher:
         assert called_config.no_proxy == "localhost,127.0.0.1"
         assert called_config.socks_proxy is None
         assert called_config.custom_headers is None
-        assert called_config.projects_filter is None
+        # Fork: the operator's allowlist also applies to header-PAT configs.
+        assert called_config.projects_filter == ["GLOBAL"]
         assert called_config.proxy_wpad_enable is True
         assert called_config.proxy_wpad_url == "http://wpad.example.com/wpad.dat"
 
@@ -710,7 +711,8 @@ class TestGetJiraFetcher:
         assert called_config.no_proxy == "localhost,127.0.0.1"
         assert called_config.socks_proxy == "socks5://proxy.example.com:1080"
         assert called_config.custom_headers is None
-        assert called_config.projects_filter is None
+        # Fork: the operator's allowlist also applies to header-PAT configs.
+        assert called_config.projects_filter == ["GLOBAL"]
         assert called_config.proxy_wpad_enable is False
         assert called_config.proxy_wpad_url is None
 
@@ -1318,7 +1320,8 @@ class TestGetConfluenceFetcher:
         assert called_config.no_proxy == "localhost,127.0.0.1"
         assert called_config.socks_proxy is None
         assert called_config.custom_headers is None
-        assert called_config.spaces_filter is None
+        # Fork: the operator's allowlist also applies to header-PAT configs.
+        assert called_config.spaces_filter == ["GLOBAL"]
         assert called_config.proxy_wpad_enable is True
         assert called_config.proxy_wpad_url == "http://wpad.example.com/wpad.dat"
 

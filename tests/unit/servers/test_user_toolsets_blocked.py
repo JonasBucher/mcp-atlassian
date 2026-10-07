@@ -74,3 +74,19 @@ async def test_blocked_user_tool_cannot_be_called_by_name():
             with pytest.raises(NotFoundError):
                 await main_mcp._call_tool_mcp(name, {})
         executor.assert_not_called()
+
+
+async def test_user_tools_hidden_in_header_only_mode(monkeypatch):
+    """Without a global config the allowlist comes from the environment."""
+    monkeypatch.setenv("JIRA_PROJECTS_FILTER", "DEV")
+    monkeypatch.setenv("CONFLUENCE_SPACES_FILTER", "DEV")
+    request_context = MagicMock()
+    request_context.request = None
+    request_context.lifespan_context = {"app_lifespan_context": MainAppContext()}
+    with patch.object(main_mcp, "_mcp_server") as mcp_server:
+        mcp_server.request_context = request_context
+        ctx = main_mcp._tool_filter_context()
+    assert ctx["blocked_toolsets"] == {
+        "toolset:jira_users",
+        "toolset:confluence_users",
+    }
