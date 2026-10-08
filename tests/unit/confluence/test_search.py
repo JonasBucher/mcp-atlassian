@@ -7,7 +7,7 @@ import pytest
 import requests
 from requests import HTTPError
 
-from mcp_atlassian.confluence.search import SearchMixin
+from mcp_atlassian.confluence.search import SearchMixin, _has_balanced_parentheses
 from mcp_atlassian.confluence.utils import quote_cql_identifier_if_needed
 from mcp_atlassian.exceptions import MCPAtlassianAuthenticationError
 
@@ -60,7 +60,9 @@ class TestSearchMixin:
 
         # Verify API call
         search_mixin.confluence.cql.assert_called_once_with(
-            cql="test query", limit=10, expand="content.history,content.version"
+            cql="test query",
+            limit=10,
+            expand="content.history,content.version,content.space",
         )
 
         # Verify result
@@ -110,7 +112,9 @@ class TestSearchMixin:
         # The nested content properties must be requested with the
         # "content." prefix, otherwise /rest/api/search ignores them.
         search_mixin.confluence.cql.assert_called_once_with(
-            cql="test query", limit=10, expand="content.history,content.version"
+            cql="test query",
+            limit=10,
+            expand="content.history,content.version,content.space",
         )
 
         assert len(result) == 1
@@ -323,7 +327,7 @@ class TestSearchMixin:
         search_mixin.confluence.cql.assert_called_with(
             cql=f"(test query) AND (space = {quoted_dev})",
             limit=10,
-            expand="content.history,content.version",
+            expand="content.history,content.version,content.space",
         )
         assert len(result) == 1
 
@@ -336,7 +340,7 @@ class TestSearchMixin:
         search_mixin.confluence.cql.assert_called_with(
             cql=f"(test query) AND (space = {quoted_dev} OR space = {quoted_team})",
             limit=10,
-            expand="content.history,content.version",
+            expand="content.history,content.version,content.space",
         )
         assert len(result) == 1
 
@@ -347,7 +351,7 @@ class TestSearchMixin:
         search_mixin.confluence.cql.assert_called_with(
             cql=f'(space = "EXISTING") AND (space = {quoted_dev})',
             limit=10,
-            expand="content.history,content.version",
+            expand="content.history,content.version,content.space",
         )
         assert len(result) == 1
 
@@ -420,7 +424,7 @@ class TestSearchMixin:
         search_mixin.confluence.cql.assert_called_with(
             cql=f"(test query) AND (space = {quoted_dev} OR space = {quoted_team})",
             limit=10,
-            expand="content.history,content.version",
+            expand="content.history,content.version,content.space",
         )
         assert len(result) == 1
 
@@ -437,7 +441,7 @@ class TestSearchMixin:
                 f" AND (space = {quoted_override})"
             ),
             limit=10,
-            expand="content.history,content.version",
+            expand="content.history,content.version,content.space",
         )
         assert len(result) == 1
 
@@ -1238,3 +1242,21 @@ class TestSearchUserServerDC:
 
         # Should only call once since there's no _links.next
         assert server_search_mixin.confluence.get.call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("cql", "balanced"),
+    [
+        ("type = page", True),
+        ("(type = page OR type = blogpost) AND text ~ x", True),
+        ('text ~ "budget (draft)"', True),
+        ("title ~ 'a)b'", True),
+        (r'text ~ "say \"hi)\""', True),
+        ("type = page) OR (type = page", False),
+        ("type = page) OR space = X OR (type = page", False),
+        ("(type = page", False),
+        ('text ~ "unterminated', False),
+    ],
+)
+def test_has_balanced_parentheses(cql: str, balanced: bool) -> None:
+    assert _has_balanced_parentheses(cql) is balanced

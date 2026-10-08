@@ -74,7 +74,7 @@ class TestCommentsMixin:
             "results": [
                 {
                     "id": "12345",
-                    "body": {"view": {"value": "<p>Comment content here</p>"}},
+                    "body": {"storage": {"value": "<p>Comment content here</p>"}},
                     "version": {"number": 1},
                     "author": {"displayName": "John Doe"},
                 }
@@ -94,13 +94,15 @@ class TestCommentsMixin:
         comments_mixin.confluence.get_page_comments.assert_called_once_with(
             content_id=page_id,
             expand=(
-                "body.view.value,version,container,ancestors,"
+                "body.storage.value,version,container,ancestors,"
                 "extensions.inlineProperties,extensions.resolution"
             ),
             depth="all",
         )
         assert len(result) == 1
         assert result[0].body == "Processed Markdown"
+        processed = comments_mixin.preprocessor.process_html_content.call_args
+        assert processed.args[0] == "<p>Comment content here</p>"
 
     def test_get_page_comments_with_html(self, comments_mixin):
         """Test get_page_comments with HTML output instead of markdown."""
@@ -110,7 +112,7 @@ class TestCommentsMixin:
             "results": [
                 {
                     "id": "12345",
-                    "body": {"view": {"value": "<p>Comment content here</p>"}},
+                    "body": {"storage": {"value": "<p>Comment content here</p>"}},
                     "version": {"number": 1},
                     "author": {"displayName": "John Doe"},
                 }
@@ -135,11 +137,11 @@ class TestCommentsMixin:
         """All v1 comment pages are returned when Confluence provides next."""
         first_comment = {
             "id": "first",
-            "body": {"view": {"value": "<p>First</p>"}},
+            "body": {"storage": {"value": "<p>First</p>"}},
         }
         second_comment = {
             "id": "second",
-            "body": {"view": {"value": "<p>Second</p>"}},
+            "body": {"storage": {"value": "<p>Second</p>"}},
         }
         comments_mixin.confluence.get_page_comments.side_effect = [
             {
@@ -235,7 +237,7 @@ class TestCommentsMixin:
         # Configure the mock to return a successful response
         comments_mixin.confluence.add_comment.return_value = {
             "id": "98765",
-            "body": {"view": {"value": "<p>This is a test comment</p>"}},
+            "body": {"storage": {"value": "<p>This is a test comment</p>"}},
             "version": {"number": 1},
             "author": {"displayName": "Test User"},
         }
@@ -272,7 +274,7 @@ class TestCommentsMixin:
         comments_mixin.confluence.add_comment.return_value = {
             "id": "98765",
             "body": {
-                "view": {"value": "<p>This is an <strong>HTML</strong> comment</p>"}
+                "storage": {"value": "<p>This is an <strong>HTML</strong> comment</p>"}
             },
             "version": {"number": 1},
             "author": {"displayName": "Test User"},
@@ -444,6 +446,10 @@ class TestReplyToComment:
             "title": "Re: Comment",
             "parentCommentId": "456789123",
             "body": {
+                "storage": {
+                    "value": "<p>This is a v2 reply</p>",
+                    "representation": "storage",
+                },
                 "view": {
                     "value": "<p>This is a v2 reply</p>",
                     "representation": "view",
@@ -622,6 +628,10 @@ class TestAddCommentV2Routing:
             "status": "current",
             "title": "New Comment",
             "body": {
+                "storage": {
+                    "value": "<p>Comment via v2</p>",
+                    "representation": "storage",
+                },
                 "view": {
                     "value": "<p>Comment via v2</p>",
                     "representation": "view",
@@ -674,7 +684,7 @@ class TestConfluenceCommentModel:
                 "type": "page",
                 "title": "Some Page",
             },
-            "body": {"view": {"value": "<p>Top-level comment</p>"}},
+            "body": {"storage": {"value": "<p>Top-level comment</p>"}},
         }
         comment = ConfluenceComment.from_api_response(data)
         assert comment.parent_comment_id is None
@@ -695,7 +705,7 @@ class TestConfluenceCommentModel:
         data = {
             "id": "111222333",
             "type": "comment",
-            "body": {"view": {"value": "<p>Comment</p>"}},
+            "body": {"storage": {"value": "<p>Comment</p>"}},
         }
         comment = ConfluenceComment.from_api_response(data)
         result = comment.to_simplified_dict()
@@ -706,7 +716,7 @@ class TestConfluenceCommentModel:
         data = {
             "id": "456789123",
             "type": "comment",
-            "body": {"view": {"value": "<p>Inline comment</p>"}},
+            "body": {"storage": {"value": "<p>Inline comment</p>"}},
             "extensions": {"location": "inline"},
         }
         comment = ConfluenceComment.from_api_response(data)
@@ -722,7 +732,7 @@ class TestConfluenceCommentModel:
         data = {
             "id": "111222333",
             "type": "comment",
-            "body": {"view": {"value": "<p>Comment</p>"}},
+            "body": {"storage": {"value": "<p>Comment</p>"}},
         }
         comment = ConfluenceComment.from_api_response(data)
         assert comment.location is None
@@ -738,7 +748,7 @@ class TestConfluenceCommentModel:
         data = {
             "id": "111222333",
             "type": "comment",
-            "body": {"view": {"value": "<p>Comment</p>"}},
+            "body": {"storage": {"value": "<p>Comment</p>"}},
         }
         comment = ConfluenceComment.from_api_response(data)
         result = comment.to_simplified_dict()
@@ -758,7 +768,7 @@ class TestConfluenceCommentModel:
         """Current Cloud v2 inline properties are normalized."""
         data = {
             "id": "456789123",
-            "body": {"view": {"value": "<p>Inline comment</p>"}},
+            "body": {"storage": {"value": "<p>Inline comment</p>"}},
             "parentCommentId": "123456789",
             "properties": {
                 "inlineMarkerRef": "cloud-marker-ref",
@@ -778,7 +788,7 @@ class TestConfluenceCommentModel:
         """Server/DC replies use the nearest comment ancestor as their parent."""
         data = {
             "id": "reply-2",
-            "body": {"view": {"value": "<p>Nested reply</p>"}},
+            "body": {"storage": {"value": "<p>Nested reply</p>"}},
             "container": {"id": "page-1", "type": "page"},
             "ancestors": [
                 {"id": "page-1", "type": "page"},
@@ -807,7 +817,7 @@ class TestGetInlineComments:
                 # footer comment that should be filtered out
                 {
                     "id": "999",
-                    "body": {"view": {"value": "<p>footer</p>"}},
+                    "body": {"storage": {"value": "<p>footer</p>"}},
                     "extensions": {"location": "footer"},
                 },
             ]
@@ -829,7 +839,7 @@ class TestGetInlineComments:
         comments_mixin_dc.confluence.get_page_comments.assert_called_once_with(
             content_id=page_id,
             expand=(
-                "body.view.value,version,container,ancestors,"
+                "body.storage.value,version,container,ancestors,"
                 "extensions.inlineProperties,extensions.resolution"
             ),
             depth="all",
@@ -844,7 +854,11 @@ class TestGetInlineComments:
                 "type": "comment",
                 "status": "open",
                 "body": {
-                    "view": {"value": "<p>v2 inline</p>", "representation": "view"}
+                    "storage": {
+                        "value": "<p>v2 inline</p>",
+                        "representation": "storage",
+                    },
+                    "view": {"value": "<p>v2 inline</p>", "representation": "view"},
                 },
                 "extensions": {"location": "inline"},
                 "properties": {
@@ -861,7 +875,11 @@ class TestGetInlineComments:
                 "status": "open",
                 "parentCommentId": "333444555",
                 "body": {
-                    "view": {"value": "<p>v2 reply</p>", "representation": "view"}
+                    "storage": {
+                        "value": "<p>v2 reply</p>",
+                        "representation": "storage",
+                    },
+                    "view": {"value": "<p>v2 reply</p>", "representation": "view"},
                 },
                 "extensions": {"location": "inline"},
                 "version": {"number": 1},
@@ -898,7 +916,7 @@ class TestGetInlineComments:
         }
         footer_comment = {
             "id": "footer",
-            "body": {"view": {"value": "<p>footer</p>"}},
+            "body": {"storage": {"value": "<p>footer</p>"}},
             "extensions": {"location": "footer"},
         }
         comments_mixin_dc.confluence.get_page_comments.side_effect = [
@@ -934,7 +952,7 @@ class TestGetInlineComments:
             "results": [
                 {
                     "id": "999",
-                    "body": {"view": {"value": "<p>footer</p>"}},
+                    "body": {"storage": {"value": "<p>footer</p>"}},
                     "extensions": {"location": "footer"},
                 }
             ]
@@ -1049,7 +1067,10 @@ class TestAddInlineComment:
             "id": "444555666",
             "type": "comment",
             "status": "open",
-            "body": {"view": {"value": "<p>v2 inline</p>", "representation": "view"}},
+            "body": {
+                "storage": {"value": "<p>v2 inline</p>", "representation": "storage"},
+                "view": {"value": "<p>v2 inline</p>", "representation": "view"},
+            },
             "extensions": {"location": "inline"},
             "version": {"number": 1},
             "_links": {},

@@ -28,19 +28,26 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 from urllib.parse import unquote
 
 from ..models.jira import JiraIssue, JiraSearchResult
 from ..utils.scope_guard import install_guards, iter_values
 from .client import JiraClient
 from .config import normalize_project_key
+from .issues import _EPIC_LINK_ALIASES
+from .protocols import FieldsOperationsProto
 
 logger = logging.getLogger("mcp-atlassian")
 
 _ISSUE_KEY = re.compile(r"^([A-Z][A-Z0-9_]*)-\d+$")
 _NUMERIC_ID = re.compile(r"^\d+$")
 _PROJECT_KEY = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+# Field names (lowercase) whose value points at another issue. Writing one
+# attaches the new or updated issue to that issue (as child, epic member or
+# Advanced Roadmaps child), which changes the referenced project too.
+_ISSUE_REFERENCE_NAMES = frozenset({"parent", "parent link"} | _EPIC_LINK_ALIASES)
 
 
 class ProjectAccessDeniedError(ValueError):
@@ -66,6 +73,7 @@ class GuardRule:
     links: tuple[str, ...] = ()
     link_payloads: tuple[str, ...] = ()
     issue_payloads: tuple[str, ...] = ()
+    issue_fields: tuple[str, ...] = ()
     result: Callable[[ProjectGuardMixin, Any], Any] | None = None
 
 
@@ -141,8 +149,8 @@ _ISSUE = GuardRule(issues=("issue_key",))
 GUARD_RULES: dict[str, GuardRule] = {
     # issues
     "get_issue": _ISSUE,
-    "create_issue": GuardRule(projects=("project_key",)),
-    "update_issue": _ISSUE,
+    "create_issue": GuardRule(projects=("project_key",), issue_fields=("kwargs",)),
+    "update_issue": GuardRule(issues=("issue_key",), issue_fields=("fields", "kwargs")),
     "assign_issue": _ISSUE,
     "delete_issue": _ISSUE,
     "move_issue": GuardRule(issues=("issue_key",), projects=("target_project_key",)),
@@ -484,6 +492,65 @@ class ProjectGuardMixin(JiraClient):
                 msg = "Could not verify the project of an issue to create"
                 raise ProjectAccessDeniedError(msg)
             self._assert_project_allowed(str(project))
+            self._assert_issue_fields_allowed(payload)
+
+    def _reference_field_ids(self) -> frozenset[str]:
+        """Custom field IDs that hold issue references (epic and parent link)."""
+        cached: frozenset[str] | None = self.__dict__.get("_reference_field_ids_store")
+        if cached is not None:
+            return cached
+        # The field helpers come from FieldsMixin, composed into JiraFetcher.
+        fields = cast(FieldsOperationsProto, self)
+        try:
+            field_map = fields._generate_field_map()
+            ids = {
+                fields.get_field_ids_to_epic().get("epic_link"),
+                field_map.get("epic link"),
+                field_map.get("parent link"),
+            }
+        except Exception as e:  # noqa: BLE001 - any lookup failure denies access
+            logger.warning(f"Project guard could not load Jira fields: {e}")
+            msg = "Could not verify which custom fields reference issues"
+            raise ProjectAccessDeniedError(msg) from e
+        resolved = frozenset(i.lower() for i in ids if i)
+        self.__dict__["_reference_field_ids_store"] = resolved
+        return resolved
+
+    def _is_issue_reference_field(self, name: str) -> bool:
+        lowered = name.strip().lower()
+        if lowered in _ISSUE_REFERENCE_NAMES:
+            return True
+        # Custom field IDs are only resolved when present, so payloads without
+        # them never need the field lookup.
+        return (
+            lowered.startswith("customfield_")
+            and lowered in self._reference_field_ids()
+        )
+
+    @staticmethod
+    def _referenced_issues(value: Any) -> tuple[str, ...]:
+        """Issue keys/IDs in a reference field value; empty when clearing."""
+        if value is None or value == "":
+            return ()
+        if isinstance(value, dict):
+            ref = value.get("key") or value.get("id")
+            if ref in (None, ""):
+                msg = "Could not verify the issue referenced by a field"
+                raise ProjectAccessDeniedError(msg)
+            return (str(ref),)
+        if isinstance(value, str | int):
+            return (str(value),)
+        msg = "Could not verify the issue referenced by a field"
+        raise ProjectAccessDeniedError(msg)
+
+    def _assert_issue_fields_allowed(self, fields: Any) -> None:
+        """Deny writes whose fields point at issues in other projects."""
+        if not isinstance(fields, dict):
+            return
+        for name, value in fields.items():
+            if self._is_issue_reference_field(str(name)):
+                for issue in self._referenced_issues(value):
+                    self._assert_issue_allowed(issue)
 
     # --- enforcement --------------------------------------------------------
 
@@ -508,6 +575,8 @@ class ProjectGuardMixin(JiraClient):
             self._assert_link_payload_allowed(arguments.get(param))
         for param in rule.issue_payloads:
             self._assert_issue_payloads_allowed(arguments.get(param))
+        for param in rule.issue_fields:
+            self._assert_issue_fields_allowed(arguments.get(param))
 
     def _guard_result(self, rule: GuardRule, result: Any) -> Any:
         if rule.result:

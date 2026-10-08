@@ -614,6 +614,8 @@ class TestConfluenceV2AdapterComments:
         # Verify the result is in v1-compatible format with body.view
         assert result["id"] == "222333444"
         assert result["body"]["view"]["value"] == "<p>Reply content</p>"
+        # Comment readers take the storage body; it must be exposed as such.
+        assert result["body"]["storage"]["value"] == "<p>Reply content</p>"
         assert result["extensions"]["location"] == "footer"
         mock_session.get.assert_not_called()
 

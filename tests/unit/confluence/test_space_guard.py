@@ -1,6 +1,8 @@
 """Tests for the fork-specific Confluence space guard."""
 
 import ast
+import contextlib
+import dataclasses
 import inspect
 from pathlib import Path
 from typing import Any
@@ -255,7 +257,8 @@ def test_search_results_from_foreign_spaces_are_dropped(fetcher):
         autospec=True,
         return_value=results,
     ):
-        assert [p.id for p in fetcher.search("text ~ x")] == ["1", "3"]
+        # "3" has no space and cannot be verified, so it is dropped too.
+        assert [p.id for p in fetcher.search("text ~ x")] == ["1"]
 
 
 def test_get_spaces_is_filtered(fetcher):
@@ -307,3 +310,101 @@ def test_space_permissions_resolve_space_id(fetcher):
 def test_labels_mixin_still_reachable_for_allowed_pages(fetcher):
     with patch.object(LabelsMixin, "get_page_labels", autospec=True, return_value=[]):
         assert fetcher.get_page_labels("100") == []
+
+
+# --- known gaps (xfail until fixed; remove the xfail marker with the fix) -----
+
+# Rendered body formats evaluate macros on the Confluence server with the
+# user's own permissions. An include, excerpt-include or Jira macro in content
+# from an allowed space then carries text from foreign spaces or projects past
+# the allowlist. Storage format only contains the macro reference.
+_RENDERED_BODY_FORMATS = ("body.view", "body.export_view", "body.styled_view")
+
+
+def _requested_expands(mock_method: MagicMock) -> list[str]:
+    return [str(c.kwargs.get("expand", "")) for c in mock_method.call_args_list]
+
+
+def _assert_no_rendered_format(mock_method: MagicMock) -> None:
+    expands = _requested_expands(mock_method)
+    assert expands, "comments were never requested"
+    rendered = [e for e in expands for fmt in _RENDERED_BODY_FORMATS if fmt in e]
+    assert not rendered, f"comments requested in a rendered format: {rendered}"
+
+
+@pytest.mark.security_regression
+def test_page_comments_are_not_read_in_a_rendered_format(fetcher):
+    fetcher.confluence.get_page_by_id.return_value = {"space": {"key": "DEV"}}
+    fetcher.confluence.get_page_comments.return_value = {"results": []}
+
+    fetcher.get_page_comments("100")
+
+    _assert_no_rendered_format(fetcher.confluence.get_page_comments)
+
+
+@pytest.mark.security_regression
+def test_inline_comments_are_not_read_in_a_rendered_format(fetcher):
+    # Server/DC URL: Cloud routes inline comments through the v2 API instead.
+    fetcher.config = dataclasses.replace(
+        fetcher.config, url="https://confluence.example.com"
+    )
+    fetcher.confluence.get_page_by_id.return_value = {"space": {"key": "DEV"}}
+    fetcher.confluence.get_page_comments.return_value = {"results": []}
+
+    fetcher.get_inline_comments("100")
+
+    _assert_no_rendered_format(fetcher.confluence.get_page_comments)
+
+
+def _cql_response(*items: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "results": list(items),
+        "start": 0,
+        "limit": 10,
+        "size": len(items),
+        "totalSize": len(items),
+    }
+
+
+@pytest.mark.security_regression
+def test_search_drops_results_whose_space_is_unknown(fetcher):
+    # /rest/api/search only includes a result's space when content.space is
+    # expanded, which search() does not do. Without a space key the
+    # post-filter keeps the result, so it never catches anything.
+    fetcher.confluence.cql.return_value = _cql_response(
+        {"content": {"id": "200", "type": "page", "title": "Secret plan"}}
+    )
+
+    assert fetcher.search("text ~ plan") == []
+
+
+@pytest.mark.security_regression
+@pytest.mark.parametrize(
+    "cql",
+    [
+        # Unbalanced: one extra ')' and one extra '(' around an injected OR.
+        'type = page) OR space = "SECRET" OR (type = page',
+        # Balanced count, but the ')' comes first: counting is not enough.
+        'text ~ "plan") OR (text ~ "plan"',
+    ],
+)
+def test_search_query_cannot_escape_the_space_allowlist(fetcher, cql):
+    # The allowlist is applied as "(<cql>) AND (space = DEV)". If the caller's
+    # query closes that parenthesis itself, an OR ends up outside the AND and
+    # Confluence returns matches from every space. How the query is refused is
+    # up to the fix; it must not reach Confluence.
+    fetcher.confluence.cql.return_value = _cql_response()
+
+    with contextlib.suppress(Exception):
+        fetcher.search(cql)
+
+    fetcher.confluence.cql.assert_not_called()
+
+
+def test_search_keeps_parentheses_inside_quoted_strings(fetcher):
+    # Guards the fix for the test above against rejecting valid queries.
+    fetcher.confluence.cql.return_value = _cql_response()
+
+    fetcher.search('text ~ "budget (draft)" AND type = page')
+
+    fetcher.confluence.cql.assert_called_once()

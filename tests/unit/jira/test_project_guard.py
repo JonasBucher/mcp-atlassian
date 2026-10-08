@@ -357,3 +357,126 @@ def test_epic_hierarchy_hides_foreign_parents(fetcher):
         group = fetcher.get_project_epic_hierarchy("DEV")["groups"][0]
     assert group["parent"] is None
     assert group["epics"] == [{"key": "DEV-7"}]
+
+
+# --- known gaps (xfail until fixed; remove the xfail marker with the fix) -----
+
+# create_issue and update_issue only check the issue's own project. A parent
+# or epic reference in the fields can point into a foreign project, which
+# changes that project's hierarchy (a new child appears under its epic).
+# Reads are not affected: foreign parents are hidden by _sanitize_issue.
+_FOREIGN_REFERENCES = [
+    pytest.param({"parent": "SECRET-1"}, id="parent-key"),
+    pytest.param({"parent": "DEV-5"}, id="parent-moved-key"),  # now SECRET
+    pytest.param({"parent": "10002"}, id="parent-numeric-id"),
+    pytest.param({"epic_link": "SECRET-1"}, id="epic-link-alias"),
+    pytest.param({"epicKey": "SECRET-1"}, id="epic-key-alias"),
+]
+
+
+@pytest.mark.security_regression
+@pytest.mark.parametrize("reference", _FOREIGN_REFERENCES)
+def test_create_issue_cannot_reference_foreign_issues(fetcher, reference):
+    with _patch("create_issue") as real:
+        with pytest.raises(ProjectAccessDeniedError):
+            fetcher.create_issue("DEV", "summary", "Task", **reference)
+        real.assert_not_called()
+
+
+@pytest.mark.security_regression
+@pytest.mark.parametrize(
+    ("fields", "kwargs"),
+    [
+        pytest.param({"parent": {"key": "SECRET-1"}}, {}, id="fields-parent-key"),
+        pytest.param({"parent": {"id": "10002"}}, {}, id="fields-parent-id"),
+        pytest.param(None, {"parent": "SECRET-1"}, id="kwarg-parent"),
+        pytest.param(None, {"epic_link": "SECRET-1"}, id="kwarg-epic-link"),
+    ],
+)
+def test_update_issue_cannot_reference_foreign_issues(fetcher, fields, kwargs):
+    with _patch("update_issue") as real:
+        with pytest.raises(ProjectAccessDeniedError):
+            fetcher.update_issue("DEV-1", fields=fields, **kwargs)
+        real.assert_not_called()
+
+
+@pytest.mark.security_regression
+def test_batch_create_cannot_reference_foreign_issues(fetcher):
+    # batch_create_issues sends jira.create_issues directly, so the
+    # create_issue guard never sees these payloads.
+    payloads = [{"project_key": "DEV", "summary": "s", "parent": "SECRET-1"}]
+    with _patch("batch_create_issues") as real:
+        with pytest.raises(ProjectAccessDeniedError):
+            fetcher.batch_create_issues(payloads)
+        real.assert_not_called()
+
+
+def test_create_issue_with_allowed_parent_still_works(fetcher):
+    # Guards the fix for the tests above against blocking same-project parents.
+    with _patch("create_issue", return_value=MagicMock()) as real:
+        fetcher.create_issue("DEV", "summary", "Sub-task", parent="DEV-2")
+        real.assert_called_once()
+
+
+_REFERENCE_FIELDS = {
+    "epic link": "customfield_10014",
+    "parent link": "customfield_10020",
+}
+
+
+@pytest.fixture
+def reference_fields():
+    with (
+        patch.object(
+            JiraFetcher, "_generate_field_map", return_value=_REFERENCE_FIELDS
+        ),
+        patch.object(
+            JiraFetcher,
+            "get_field_ids_to_epic",
+            return_value={"epic_link": "customfield_10014"},
+        ),
+    ):
+        yield
+
+
+@pytest.mark.parametrize(
+    ("extra", "allowed"),
+    [
+        pytest.param({"customfield_10014": "SECRET-1"}, False, id="epic-link-id"),
+        pytest.param(
+            {"customfield_10020": {"key": "SECRET-1"}}, False, id="parent-link-id"
+        ),
+        pytest.param({"Parent Link": "SECRET-1"}, False, id="parent-link-name"),
+        pytest.param({"customfield_10014": "DEV-2"}, True, id="epic-link-same-project"),
+        pytest.param({"customfield_10030": "SECRET-1"}, True, id="unrelated-field"),
+    ],
+)
+def test_issue_reference_custom_fields_are_checked(
+    fetcher, reference_fields, extra, allowed
+):
+    with _patch("create_issue", return_value=MagicMock()) as real:
+        if allowed:
+            fetcher.create_issue("DEV", "summary", "Task", **extra)
+            real.assert_called_once()
+        else:
+            with pytest.raises(ProjectAccessDeniedError):
+                fetcher.create_issue("DEV", "summary", "Task", **extra)
+            real.assert_not_called()
+
+
+def test_custom_fields_are_denied_when_field_lookup_fails(fetcher):
+    with (
+        patch.object(
+            JiraFetcher, "_generate_field_map", side_effect=RuntimeError("503")
+        ),
+        _patch("update_issue") as real,
+    ):
+        with pytest.raises(ProjectAccessDeniedError):
+            fetcher.update_issue("DEV-1", fields={"customfield_10014": "DEV-2"})
+        real.assert_not_called()
+
+
+def test_clearing_a_parent_is_allowed(fetcher):
+    with _patch("update_issue", return_value=MagicMock()) as real:
+        fetcher.update_issue("DEV-1", fields={"parent": None})
+        real.assert_called_once()

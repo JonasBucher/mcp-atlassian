@@ -885,6 +885,13 @@ class ConfluenceV2Adapter:
             "status": v2_response.get("status"),
             "title": v2_response.get("title"),
             "body": {
+                # The v2 API returns storage format. It is exposed under
+                # "storage" for the comment readers and kept under "view"
+                # for ConfluenceComment.from_api_response.
+                "storage": {
+                    "value": body_value,
+                    "representation": "storage",
+                },
                 "view": {
                     "value": body_value,
                     "representation": "view",
@@ -933,6 +940,13 @@ class ConfluenceV2Adapter:
             "status": v2_response.get("status"),
             "title": v2_response.get("title"),
             "body": {
+                # The v2 API returns storage format. It is exposed under
+                # "storage" for the comment readers and kept under "view"
+                # for ConfluenceComment.from_api_response.
+                "storage": {
+                    "value": body_value,
+                    "representation": "storage",
+                },
                 "view": {
                     "value": body_value,
                     "representation": "view",
