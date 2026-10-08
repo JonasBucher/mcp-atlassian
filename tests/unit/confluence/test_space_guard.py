@@ -332,9 +332,6 @@ def _assert_no_rendered_format(mock_method: MagicMock) -> None:
 
 
 @pytest.mark.security_regression
-@pytest.mark.xfail(
-    strict=True, reason="gap 1: page comments are read as rendered body.view"
-)
 def test_page_comments_are_not_read_in_a_rendered_format(fetcher):
     fetcher.confluence.get_page_by_id.return_value = {"space": {"key": "DEV"}}
     fetcher.confluence.get_page_comments.return_value = {"results": []}
@@ -345,9 +342,6 @@ def test_page_comments_are_not_read_in_a_rendered_format(fetcher):
 
 
 @pytest.mark.security_regression
-@pytest.mark.xfail(
-    strict=True, reason="gap 1: v1 inline comments are read as rendered body.view"
-)
 def test_inline_comments_are_not_read_in_a_rendered_format(fetcher):
     # Server/DC URL: Cloud routes inline comments through the v2 API instead.
     fetcher.config = dataclasses.replace(

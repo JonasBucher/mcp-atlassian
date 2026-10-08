@@ -13,6 +13,24 @@ from .v2_adapter import ConfluenceV2Adapter
 
 logger = logging.getLogger("mcp-atlassian")
 
+# Comments are read in storage format, never in a rendered format (body.view,
+# body.export_view). Rendering evaluates macros on the Confluence server with
+# the user's permissions, so an include, excerpt-include or Jira macro in a
+# comment would carry content from other spaces and projects past the space
+# allowlist. Storage format only contains the macro reference.
+_COMMENT_EXPAND = (
+    "body.storage.value,version,container,ancestors,"
+    "extensions.inlineProperties,extensions.resolution"
+)
+
+
+def _storage_body(comment_data: dict[str, Any]) -> str:
+    """Return a comment's storage-format body, or an empty string."""
+    body = comment_data.get("body")
+    storage = body.get("storage") if isinstance(body, dict) else None
+    value = storage.get("value") if isinstance(storage, dict) else None
+    return value if isinstance(value, str) else ""
+
 
 class CommentsMixin(ConfluenceClient):
     """Mixin for Confluence comment operations."""
@@ -98,17 +116,13 @@ class CommentsMixin(ConfluenceClient):
             # Get comments with expanded content
             raw_comments = self._get_all_v1_page_comments(
                 page_id,
-                expand=(
-                    "body.view.value,version,container,ancestors,"
-                    "extensions.inlineProperties,extensions.resolution"
-                ),
+                expand=_COMMENT_EXPAND,
             )
 
             # Process each comment
             comment_models = []
             for comment_data in raw_comments:
-                # Get the content based on format
-                body = comment_data["body"]["view"]["value"]
+                body = _storage_body(comment_data)
                 processed_html, processed_markdown = (
                     self.preprocessor.process_html_content(
                         body, space_key=space_key, confluence_client=self.confluence
@@ -331,10 +345,7 @@ class CommentsMixin(ConfluenceClient):
                 space_key = page.get("space", {}).get("key", "")
                 all_comments = self._get_all_v1_page_comments(
                     page_id,
-                    expand=(
-                        "body.view.value,version,container,ancestors,"
-                        "extensions.inlineProperties,extensions.resolution"
-                    ),
+                    expand=_COMMENT_EXPAND,
                 )
                 raw_comments = [
                     c
@@ -344,7 +355,7 @@ class CommentsMixin(ConfluenceClient):
 
             comment_models = []
             for comment_data in raw_comments:
-                body = comment_data.get("body", {}).get("view", {}).get("value", "")
+                body = _storage_body(comment_data)
                 processed_html, processed_markdown = (
                     self.preprocessor.process_html_content(
                         body, space_key=space_key, confluence_client=self.confluence
@@ -505,19 +516,7 @@ class CommentsMixin(ConfluenceClient):
         Returns:
             Processed ConfluenceComment instance
         """
-        body = response.get("body") or {}
-        if not isinstance(body, dict):
-            body = {}
-
-        view = body.get("view") or {}
-        if not isinstance(view, dict):
-            view = {}
-
-        body_html = view.get("value") or ""
-        if not body_html:
-            storage = body.get("storage") or {}
-            if isinstance(storage, dict):
-                body_html = storage.get("value") or ""
+        body_html = _storage_body(response)
 
         _, processed_markdown = self.preprocessor.process_html_content(
             body_html,
