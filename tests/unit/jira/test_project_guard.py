@@ -357,3 +357,67 @@ def test_epic_hierarchy_hides_foreign_parents(fetcher):
         group = fetcher.get_project_epic_hierarchy("DEV")["groups"][0]
     assert group["parent"] is None
     assert group["epics"] == [{"key": "DEV-7"}]
+
+
+# --- known gaps (xfail until fixed; remove the xfail marker with the fix) -----
+
+# create_issue and update_issue only check the issue's own project. A parent
+# or epic reference in the fields can point into a foreign project, which
+# changes that project's hierarchy (a new child appears under its epic).
+# Reads are not affected: foreign parents are hidden by _sanitize_issue.
+_FOREIGN_REFERENCES = [
+    pytest.param({"parent": "SECRET-1"}, id="parent-key"),
+    pytest.param({"parent": "DEV-5"}, id="parent-moved-key"),  # now SECRET
+    pytest.param({"parent": "10002"}, id="parent-numeric-id"),
+    pytest.param({"epic_link": "SECRET-1"}, id="epic-link-alias"),
+    pytest.param({"epicKey": "SECRET-1"}, id="epic-key-alias"),
+]
+
+
+@pytest.mark.security_regression
+@pytest.mark.xfail(strict=True, reason="gap 3: create_issue does not check parent/epic")
+@pytest.mark.parametrize("reference", _FOREIGN_REFERENCES)
+def test_create_issue_cannot_reference_foreign_issues(fetcher, reference):
+    with _patch("create_issue") as real:
+        with pytest.raises(ProjectAccessDeniedError):
+            fetcher.create_issue("DEV", "summary", "Task", **reference)
+        real.assert_not_called()
+
+
+@pytest.mark.security_regression
+@pytest.mark.xfail(strict=True, reason="gap 3: update_issue does not check parent/epic")
+@pytest.mark.parametrize(
+    ("fields", "kwargs"),
+    [
+        pytest.param({"parent": {"key": "SECRET-1"}}, {}, id="fields-parent-key"),
+        pytest.param({"parent": {"id": "10002"}}, {}, id="fields-parent-id"),
+        pytest.param(None, {"parent": "SECRET-1"}, id="kwarg-parent"),
+        pytest.param(None, {"epic_link": "SECRET-1"}, id="kwarg-epic-link"),
+    ],
+)
+def test_update_issue_cannot_reference_foreign_issues(fetcher, fields, kwargs):
+    with _patch("update_issue") as real:
+        with pytest.raises(ProjectAccessDeniedError):
+            fetcher.update_issue("DEV-1", fields=fields, **kwargs)
+        real.assert_not_called()
+
+
+@pytest.mark.security_regression
+@pytest.mark.xfail(
+    strict=True, reason="gap 3: batch payload fields are not checked beyond project"
+)
+def test_batch_create_cannot_reference_foreign_issues(fetcher):
+    # batch_create_issues sends jira.create_issues directly, so the
+    # create_issue guard never sees these payloads.
+    payloads = [{"project_key": "DEV", "summary": "s", "parent": "SECRET-1"}]
+    with _patch("batch_create_issues") as real:
+        with pytest.raises(ProjectAccessDeniedError):
+            fetcher.batch_create_issues(payloads)
+        real.assert_not_called()
+
+
+def test_create_issue_with_allowed_parent_still_works(fetcher):
+    # Guards the fix for the tests above against blocking same-project parents.
+    with _patch("create_issue", return_value=MagicMock()) as real:
+        fetcher.create_issue("DEV", "summary", "Sub-task", parent="DEV-2")
+        real.assert_called_once()
