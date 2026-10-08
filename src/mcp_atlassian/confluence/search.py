@@ -21,6 +21,36 @@ from .utils import quote_cql_identifier_if_needed
 logger = logging.getLogger("mcp-atlassian")
 
 
+def _has_balanced_parentheses(cql: str) -> bool:
+    """Check that ``cql``'s parentheses nest correctly outside quoted strings.
+
+    The spaces allowlist is applied as ``(<cql>) AND (<spaces>)``. A query
+    that closes that outer parenthesis itself (``x) OR (y``), or leaves a
+    quote open, can move its own clauses outside the AND and escape the
+    allowlist.
+    """
+    depth = 0
+    quote_char: str | None = None
+    escaped = False
+    for char in cql:
+        if quote_char:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote_char:
+                quote_char = None
+        elif char in ("'", '"'):
+            quote_char = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0 and quote_char is None
+
+
 class SearchMixin(ConfluenceClient):
     """Mixin for Confluence search operations."""
 
@@ -36,6 +66,12 @@ class SearchMixin(ConfluenceClient):
         )
         if not cql:
             return space_query
+        if not _has_balanced_parentheses(cql):
+            msg = (
+                "CQL query has unbalanced parentheses or quotes; it cannot be "
+                "combined safely with the spaces filter"
+            )
+            raise ValueError(msg)
         # Extract a trailing ORDER BY so the AND does not produce invalid CQL.
         order_match = re.search(r"\s+(ORDER\s+BY\s+.*)$", cql, re.IGNORECASE)
         if order_match:
@@ -116,11 +152,14 @@ class SearchMixin(ConfluenceClient):
 
         # Execute the CQL search query. Expand content.history and
         # content.version so each result carries created/updated/author and
-        # version metadata; on the /rest/api/search endpoint these nested
+        # version metadata, and content.space so the space guard can check
+        # each result's space; on the /rest/api/search endpoint these nested
         # properties require the "content." prefix (a bare "history,version"
         # is silently ignored).
         results = self.confluence.cql(
-            cql=cql, limit=limit, expand="content.history,content.version"
+            cql=cql,
+            limit=limit,
+            expand="content.history,content.version,content.space",
         )
 
         # Surface malformed responses (missing "results") as errors while

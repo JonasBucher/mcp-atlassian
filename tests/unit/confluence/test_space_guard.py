@@ -257,7 +257,8 @@ def test_search_results_from_foreign_spaces_are_dropped(fetcher):
         autospec=True,
         return_value=results,
     ):
-        assert [p.id for p in fetcher.search("text ~ x")] == ["1", "3"]
+        # "3" has no space and cannot be verified, so it is dropped too.
+        assert [p.id for p in fetcher.search("text ~ x")] == ["1"]
 
 
 def test_get_spaces_is_filtered(fetcher):
@@ -366,9 +367,6 @@ def _cql_response(*items: dict[str, Any]) -> dict[str, Any]:
 
 
 @pytest.mark.security_regression
-@pytest.mark.xfail(
-    strict=True, reason="gap 2: search keeps results whose space is unknown"
-)
 def test_search_drops_results_whose_space_is_unknown(fetcher):
     # /rest/api/search only includes a result's space when content.space is
     # expanded, which search() does not do. Without a space key the
@@ -381,10 +379,6 @@ def test_search_drops_results_whose_space_is_unknown(fetcher):
 
 
 @pytest.mark.security_regression
-@pytest.mark.xfail(
-    strict=True,
-    reason="gap 2: a query can close the allowlist's parentheses early",
-)
 @pytest.mark.parametrize(
     "cql",
     [

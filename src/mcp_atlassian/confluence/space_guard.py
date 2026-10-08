@@ -64,15 +64,17 @@ class GuardRule:
 
 
 def _filter_search_results(guard: SpaceGuardMixin, pages: list[Any]) -> list[Any]:
-    # CQL already ANDs the allowlist (see SearchMixin.search); this drops any
-    # result whose space is known and foreign as a second line of defence.
-    # Results without a resolvable space key are kept because the CQL
-    # restriction is authoritative for them.
+    # CQL already ANDs the allowlist (see SearchMixin.search); this is the
+    # second line of defence. SearchMixin.search expands content.space, so
+    # every result should carry its space. A result without one cannot be
+    # verified and is dropped (fail closed).
     kept = []
     for page in pages:
         key = page.space.key if getattr(page, "space", None) else ""
-        if key and not guard._is_space_allowed(key):
-            logger.warning(f"Space guard dropped search result {page.id} ({key})")
+        if not guard._is_space_allowed(key):
+            logger.warning(
+                f"Space guard dropped search result {page.id} ({key or 'no space'})"
+            )
             continue
         kept.append(page)
     return kept
